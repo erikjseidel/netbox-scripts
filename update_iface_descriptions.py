@@ -2,7 +2,7 @@ from extras.scripts import Script
 from dcim.models import Device, Interface, VirtualLink
 from ipam.models import L2VPNTermination
 
-class MyScript(Script):
+class UpdateIfaceDescriptions(Script):
 
     class Meta:
         name = "Regularize Interface Descriptions"
