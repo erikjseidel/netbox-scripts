@@ -6,7 +6,7 @@ class UpdateIfaceDescriptions(Script):
 
     class Meta:
         name = "Regularize Interface Descriptions"
-        scheduling_enabled = False
+        description = "Updates interface description fields with standardized descriptions"
 
 
     def run(self, data, commit):
@@ -60,6 +60,7 @@ class UpdateIfaceDescriptions(Script):
 
             if updated:
                 interface.save()
+                self.log_info(f'Updated {path} description to {interface.description}')
                 result = 'UPDATED'
                 out = f'{result:10} {path:18} {interface.description}'
             else:
@@ -68,4 +69,5 @@ class UpdateIfaceDescriptions(Script):
 
             output += f'{out}\n'
 
+        self.log_success('Interface description regularization complete.')
         return f'Interface descriptions updated:\n-----\n{output}'

@@ -8,7 +8,7 @@ class UpdatePTRs(Script):
 
     class Meta:
         name = "Regularize PTR Fields"
-        scheduling_enabled = False
+        description = "Updates IP address DNS fields with standardized PTR names"
 
 
     def run(self, data, commit):
@@ -51,10 +51,12 @@ class UpdatePTRs(Script):
                 if address.dns_name != dns_name:
                     address.dns_name = dns_name
                     address.save()
+                    self.log_info(f'Updated {address.address} PTR to {address.dns_name}')
                     out = f' UPDATED   {str(address.address):30} {address.dns_name}'
                 else:
                     out = f'           {str(address.address):30} {address.dns_name}'
 
                 output += f'{out}\n'
 
+        self.log_success('DNS (PTR) regularization complete.')
         return f'IP address PTR records (dns) updated:\n-----\n{output}'
