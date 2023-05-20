@@ -131,7 +131,6 @@ class GenerateNew(Script):
             create_ips(peer_iface, [prefix4[1], prefix6[1]])
             updated = True
 
-
         if updated:
             self.log_success('New IP address generation for selected PTP interfaces complete.')
         else:
