@@ -37,8 +37,8 @@ class UpdatePTRs(Script):
                     ptr_prefix = '%s-%s' % ( interface.device.name.lower(), interface.name.lower() )
 
             if 'lan' in tags:
-                if vid := interface.untagged_vlan.vid:
-                    ptr_prefix = '%s-vlan%s-gw' % ( interface.device.name.lower(), str(vid) )
+                if vlan := interface.untagged_vlan:
+                    ptr_prefix = '%s-vlan%s-gw' % ( interface.device.name.lower(), str(vlan.vid) )
                 else:
                     ptr_prefix = '%s-lan-gw' % interface.device.name.lower()
 
