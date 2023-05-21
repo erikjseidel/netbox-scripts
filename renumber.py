@@ -127,8 +127,22 @@ class GenerateNew(Script):
                     iface.tags.remove(renumber)
                 self.log_info(f'New IP addresses created for {iface.device.name}:{iface.name}')
 
-            create_ips(interface,  [prefix4[0], prefix6[0]])
-            create_ips(peer_iface, [prefix4[1], prefix6[1]])
+            create_ips(
+                    interface,
+                    [
+                        str(prefix4[0]) + '/' + str(prefix4.prefixlen),
+                        str(prefix6[0]) + '/' + str(prefix6.prefixlen)
+                    ]
+            )
+
+            create_ips(
+                    peer_iface,
+                    [
+                        str(prefix4[1]) + '/' + str(prefix4.prefixlen),
+                        str(prefix6[1]) + '/' + str(prefix6.prefixlen)
+                    ]
+            )
+
             updated = True
 
         if updated:
