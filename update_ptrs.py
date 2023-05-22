@@ -1,3 +1,4 @@
+import yaml
 from extras.scripts import Script
 from dcim.models import Device, Interface, VirtualLink
 from ipam.models import IPAddress
@@ -12,7 +13,7 @@ class UpdatePTRs(Script):
 
 
     def run(self, data, commit):
-        output = ""
+        out = {}
 
         for address in IPAddress.objects.all():
             ptr_prefix = None
@@ -52,11 +53,18 @@ class UpdatePTRs(Script):
                     address.dns_name = dns_name
                     address.save()
                     self.log_info(f'Updated {address.address} PTR to {address.dns_name}')
-                    out = f' UPDATED   {str(address.address):30} {address.dns_name}'
-                else:
-                    out = f'           {str(address.address):30} {address.dns_name}'
+                    out[str(address.address)] = {
+                            'ptr'    : address.dns_name,
+                            'action' : 'updated',
+                            }
 
-                output += f'{out}\n'
+        if out:
+            msg = 'DNS (PTR) regularization complete.'
+            self.log_success(msg)
+            ret =  { 'result': True, 'out': out, 'comment': msg }
+        else:
+            msg = 'All DNS (PTR) up-to-date. No changes made.'
+            self.log_warning(msg)
+            ret =  { 'result': True, 'comment': msg }
 
-        self.log_success('DNS (PTR) regularization complete.')
-        return f'IP address PTR records (dns) updated:\n-----\n{output}'
+        return yaml.dump(ret)

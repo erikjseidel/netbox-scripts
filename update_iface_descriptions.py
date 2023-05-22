@@ -1,3 +1,4 @@
+import yaml
 from extras.scripts import Script
 from dcim.models import Device, Interface, VirtualLink
 from ipam.models import L2VPNTermination
@@ -10,7 +11,7 @@ class UpdateIfaceDescriptions(Script):
 
 
     def run(self, data, commit):
-        output = ""
+        out = {}
 
         for interface in Interface.objects.all():
             updated = False
@@ -56,18 +57,23 @@ class UpdateIfaceDescriptions(Script):
                 interface.description = description
                 updated = True
 
-            path = f'{interface.device.name}:{interface.name}'
-
             if updated:
                 interface.save()
                 self.log_info(f'Updated {path} description to {interface.description}')
-                result = 'UPDATED'
-                out = f'{result:10} {path:18} {interface.description}'
-            else:
-                result = ''
-                out = f'{result:10} {path:18} {interface.description}'
+                if interface.device.name not in out:
+                    out[interface.device.name] = {}
+                out[interface.device.name][interface.name] = {
+                        'description' : interface.description,
+                        'action'      : 'updated',
+                        }
 
-            output += f'{out}\n'
+        if out:
+            msg = 'Interface description regularization complete.'
+            self.log_success(msg)
+            ret =  { 'result': True, 'out': out, 'comment': msg }
+        else:
+            msg = 'All interfaces up-to-date. No changes made.'
+            self.log_warning(msg)
+            ret =  { 'result': True, 'comment': msg }
 
-        self.log_success('Interface description regularization complete.')
-        return f'Interface descriptions updated:\n-----\n{output}'
+        return yaml.dump(ret)

@@ -1,4 +1,4 @@
-import netaddr
+import netaddr, yaml
 from copy import copy
 from extras.scripts import *
 from extras.models import Tag
@@ -32,14 +32,22 @@ class GenerateNew(Script):
 
     def run(self, data, commit):
         updated = False
-        output = ""
+        out = {}
 
         renumber = Tag.objects.get(name='renumber')
         l2ptp = Tag.objects.get(name='l2ptp')
         l3ptp = Tag.objects.get(name='l3ptp')
 
-        ips4 = data['ipv4_prefix'].get_available_ips()
-        ips6 = data['ipv6_prefix'].get_available_ips()
+        if isinstance(data['ipv4_prefix'], int):
+            # API does not support passing objects; use prefix id instead.
+            ips4 = Prefix.objects.get(id=data['ipv4_prefix']).get_available_ips()
+        else:
+            ips4 = data['ipv4_prefix'].get_available_ips()
+
+        if isinstance(data['ipv6_prefix'], int):
+            ips6 = Prefix.objects.get(id=data['ipv6_prefix']).get_available_ips()
+        else:
+            ips6 = data['ipv6_prefix'].get_available_ips()
 
         # Load or create 'new_ip' tag which is used to mark IPs created by this method.
         if Tag.objects.filter(name='new_ip'):
@@ -96,6 +104,8 @@ class GenerateNew(Script):
             prefix4 = copy(cidr4)
             prefix4.prefixlen = 31
             ips4.remove(prefix4)
+            new4 = [ str(prefix4[0]) + '/' + str(prefix4.prefixlen),
+                     str(prefix4[1]) + '/' + str(prefix4.prefixlen) ]
 
             # Select IPv6 /127 and create IP objects
             for cidr6 in ips6.iter_cidrs():
@@ -104,15 +114,37 @@ class GenerateNew(Script):
             prefix6 = copy(cidr6)
             prefix6.prefixlen = 127
             ips6.remove(prefix6)
+            new6 = [ str(prefix6[0]) + '/' + str(prefix6.prefixlen),
+                     str(prefix6[1]) + '/' + str(prefix6.prefixlen) ]
 
-            output += f'{interface.name}<->{peer_iface.name}:\n' 
-            output += f'\t{new_tag.name}: {prefix4[0]} {prefix4[1]} {prefix6[0]} {prefix6[1]}\n'
+            if interface.device.name not in out:
+                out[interface.device.name] = {}
+
+            out[interface.device.name][interface.name] = { 
+                    'added': {
+                        'ips': [ new4[0], new6[0] ],
+                        'tag': new_ip.name,
+                        }
+                    }
+
+            if peer_iface.device.name not in out:
+                out[peer_iface.device.name] = {}
+
+            out[peer_iface.device.name][peer_iface.name] = { 
+                    'added': {
+                        'ips': [ new4[1], new6[1] ],
+                        'tag': new_ip.name,
+                        }
+                    }
 
             # Tag the old IP address for removal.
             for i in [interface, peer_iface]: 
                 for ip in IPAddress.objects.filter(interface=i):
                     ip.tags.add(prune)
-                    output += f'\t{prune.name}: {ip.address}\n'
+                    if not out[i.device.name][i.name].get('old_ips'):
+                        out[i.device.name][i.name]['old_ips'] = { 'ips': [], 'tag': prune.name }
+                    out[i.device.name][i.name]['old_ips']['ips'].append(str(ip.address))
+
                 self.log_info(f'Existing IP addresses on {i.device.name}:{i.name} marked for removal')
 
             # Create IP assignments for interface and peer_iface.
@@ -127,29 +159,18 @@ class GenerateNew(Script):
                     iface.tags.remove(renumber)
                 self.log_info(f'New IP addresses created for {iface.device.name}:{iface.name}')
 
-            create_ips(
-                    interface,
-                    [
-                        str(prefix4[0]) + '/' + str(prefix4.prefixlen),
-                        str(prefix6[0]) + '/' + str(prefix6.prefixlen)
-                    ]
-            )
-
-            create_ips(
-                    peer_iface,
-                    [
-                        str(prefix4[1]) + '/' + str(prefix4.prefixlen),
-                        str(prefix6[1]) + '/' + str(prefix6.prefixlen)
-                    ]
-            )
+            create_ips(interface, [ new4[0], new6[0] ])
+            create_ips(peer_iface, [ new4[1], new6[1] ])
 
             updated = True
 
         if updated:
             self.log_success('New IP address generation for selected PTP interfaces complete.')
         else:
-            self.log_failure('No eligible interfaces marked for renumbering.')
-        return output
+            msg = 'No eligible interfaces marked for renumbering.'
+            self.log_warning(msg)
+            return yaml.dump({ "result": False, "comment": msg })
+        return yaml.dump({ "result": True, "out": out, "comment": "renumber process completed."})
 
 
 class PruneIPs(Script):
@@ -163,19 +184,20 @@ class PruneIPs(Script):
     def run(self, data, commit):
         prune = Tag.objects.get(name='prune')
         new_ip = Tag.objects.get(name='new_ip')
+        out = {}
 
-        output = "Deleted:\n-----\n"
+        out['deleted'] = []
         for ip in IPAddress.objects.filter(tags=prune):
             ip.delete()
             self.log_info(f'{ip.address} deleted')
-            output += f'{ip.address}\n'
+            out['deleted'].append(str(ip.address))
         self.log_success('Old IP address deletion complete.')
 
-        output += "\nCleared new IP tag:\n-----\n"
+        out['new_tag_cleared'] = []
         for ip in IPAddress.objects.filter(tags=new_ip):
             ip.tags.remove(new_ip)
             self.log_info(f'{ip.address} \'new\' tag removed')
-            output += f'{ip.address}\n'
+            out['new_tag_cleared'].append(str(ip.address))
         self.log_success('New IP address cleanup complete.')
 
-        return output
+        return yaml.dump({ 'result': True, 'out': out, 'comment': 'IP addresses pruned' })
