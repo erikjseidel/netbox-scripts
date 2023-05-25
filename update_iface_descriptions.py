@@ -59,7 +59,7 @@ class UpdateIfaceDescriptions(Script):
 
             if updated:
                 interface.save()
-                self.log_info(f'Updated {path} description to {interface.description}')
+                self.log_info(f'Updated X description to {interface.description}')
                 if interface.device.name not in out:
                     out[interface.device.name] = {}
                 out[interface.device.name][interface.name] = {
