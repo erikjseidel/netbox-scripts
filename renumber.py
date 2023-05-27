@@ -4,7 +4,6 @@ from extras.scripts import *
 from extras.models import Tag
 from dcim.models import Interface, VirtualLink
 from ipam.models import Prefix, IPAddress
-from utilities.exceptions import AbortScript
 
 class GenerateNew(Script):
 
@@ -38,18 +37,64 @@ class GenerateNew(Script):
         l2ptp = Tag.objects.get(name='l2ptp')
         l3ptp = Tag.objects.get(name='l3ptp')
 
-        if isinstance(data['ipv4_prefix'], int):
-            # API does not support passing objects; use prefix id instead.
-            ips4 = Prefix.objects.get(id=data['ipv4_prefix']).get_available_ips()
-        else:
-            ips4 = data['ipv4_prefix'].get_available_ips()
+        def get_ips(in_prefix, family):
+            """
+            The API does not support passing objects in, so we support additional data
+            types for incoming prefixes. This function contains handlers for loading
+            prefixes by id when we receive an int and by prefix string when we get a 
+            string. It also checks to ensure that prefix exists in netbox and is of the
+            correct family in case of int and str input.
+            """
+            if isinstance(in_prefix, int):
+                try:
+                    p = Prefix.objects.get(id=in_prefix)
+                except DoesNotExist:
+                    # In case of errors we return a str instead of a netaddr netset.
+                    return f"Prefix id { in_prefix } not found in Netbox"
 
-        if isinstance(data['ipv6_prefix'], int):
-            ips6 = Prefix.objects.get(id=data['ipv6_prefix']).get_available_ips()
-        else:
-            ips6 = data['ipv6_prefix'].get_available_ips()
+                if p.family != family:
+                    return f"Prefix id { in_prefix }: address family mismatch"
 
+                ips = p.get_available_ips()
+
+            elif isinstance(in_prefix, str):
+                if not ( p := Prefix.objects.filter(prefix=in_prefix) ):
+                    return f"Prefix { in_prefix } not found in Netbox"
+
+                assert len(p) == 1
+
+                if p[0].family != family:
+                    return f"Prefix { in_prefix }: address family mismatch"
+
+                ips = p[0].get_available_ips()
+
+            else:
+                # In case of incoming object (default case) we assume that prefix is
+                # coming in from ObjectVar field above and is thus valid.
+                ips = in_prefix.get_available_ips()
+
+            # netaddr NetSet object containing available IPs for this prefix.
+            return ips
+
+        
+        #
+        # Send IPv4 and IPv6 prefix input data to get_ips handler
+        #
+
+        if isinstance( (ips4 := get_ips(data['ipv4_prefix'], 4)), str ):
+            # if we get a str back that means there was a problem and we should
+            # just return the message contained in the str.
+            self.log_warning(ips4)
+            return yaml.dump({'result': False, 'out': None, 'comment': ips4})
+
+        if isinstance( (ips6 := get_ips(data['ipv6_prefix'], 6)), str ):
+            self.log_warning(ips6)
+            return yaml.dump({'result': False, 'out': None, 'comment': ips6})
+
+        #
         # Load or create 'new_ip' tag which is used to mark IPs created by this method.
+        #
+
         if Tag.objects.filter(name='new_ip'):
             new_ip = Tag.objects.get(name='new_ip')
         else:
@@ -60,8 +105,11 @@ class GenerateNew(Script):
                     )
             new_ip.save()
 
+        #
         # Load or create 'prune' tag which is used to mark existing IPs assigned to
         # interfaces assigned new IPs by this method.
+        #
+
         if Tag.objects.filter(name='prune'):
             prune = Tag.objects.get(name='prune')
         else:
@@ -170,6 +218,10 @@ class GenerateNew(Script):
             msg = 'No eligible interfaces marked for renumbering.'
             self.log_warning(msg)
             return yaml.dump({ "result": False, "comment": msg })
+
+        # Adhere to yaml output as this is (1) human readable in case script used directly from
+        # NetBox UI and (2) can be converted back to an object in case of API consumers such as
+        # SaltStack or netdb-util calls.
         return yaml.dump({ "result": True, "out": out, "comment": "renumber process completed."})
 
 
