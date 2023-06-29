@@ -33,6 +33,6 @@ def cancellable(func):
             self.output = str(e)
 
             # Tell Netbox to rollback the transaction (same behaviour as commit=False)
-            raise AbortTransaction()
+            raise AbortTransaction(self.output)
 
     return decorator

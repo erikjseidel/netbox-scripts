@@ -16,7 +16,7 @@ def yaml_out(func):
         except Exception as e:
             self.output = {
                     'result'  : False,
-                    'comment' : self.output,
+                    'comment' : str(e),
                     }
 
             raise e
