@@ -1,6 +1,6 @@
 import netaddr
 from copy import copy
-from extras.scripts import *
+from extras.scripts import Script, ObjectVar
 from extras.models import Tag
 from dcim.models import Interface, VirtualLink
 from ipam.models import Prefix, IPAddress
