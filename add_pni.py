@@ -1,4 +1,4 @@
-import netaddr, yaml
+import netaddr
 from extras.scripts import Script
 from extras.scripts import *
 from extras.models import Tag
@@ -7,7 +7,9 @@ from dcim.models import Device, Interface
 from dcim.choices import InterfaceTypeChoices, InterfaceModeChoices
 from ipam.models import Prefix, IPAddress, VLAN, Role
 from ipam.choices import IPAddressStatusChoices
-from utilities.exceptions import AbortScript
+#from utilities.exceptions import AbortScript, AbortTransaction
+from scripts.util.cancel_script import CancelScript, cancellable
+from scripts.util.yaml_out import yaml_out
 
 class AddPNI(Script):
 
@@ -56,6 +58,8 @@ class AddPNI(Script):
             required=False,
             )
 
+    @yaml_out
+    @cancellable
     def run(self, data, commit):
 
         if isinstance(data['device'], str) and isinstance(data['interface'], str):
@@ -65,12 +69,7 @@ class AddPNI(Script):
                 interface = Interface.objects.get(device=device, name=data['interface'])
             except ObjectDoesNotExist:
                 msg = f"Interface {data['device']}:{data['interface']} not found or not unique"
-                self.log_failure(msg)
-                return yaml.dump({
-                    'result'  : False,
-                    'comment' : msg,
-                    })
-
+                raise CancelScript(msg)
 
             if my_ipv4 := data.get('my_ipv4'):
                 my_ipv4 = netaddr.IPNetwork(my_ipv4)
@@ -94,15 +93,11 @@ class AddPNI(Script):
 
             if vlan_id not in range(1,4095):
                 msg = f'vlan_id must be an integer between 1 and 4094'
-                self.log_failure(msg)
-                return yaml.dump({
-                    'result'  : False,
-                    'comment' : msg,
-                    })
+                raise CancelScript(msg)
 
             if interface.mode == InterfaceModeChoices.MODE_ACCESS:
                 # We do not support Q-in-Q; so if already access mode then exit.
-                raise AbortScript(f'Cannot assign a VLAN to interface {interface.name}')
+                raise CancelScript(f'Cannot assign a VLAN to interface {interface.name}')
 
             vlan_name = f'{interface.name}.{int(vlan_id)}'
 
@@ -147,11 +142,7 @@ class AddPNI(Script):
 
         if interface.count_ipaddresses > 0:
             msg = f'Interface {interface.name} already has IPs assigned to it'
-            self.log_failure(msg)
-            return yaml.dump({
-                'result'  : False,
-                'comment' : msg,
-                })
+            raise CancelScript(msg)
 
         # We assume that PNIs are Layer2 PtP
         interface.tags.add( Tag.objects.get(name='l2ptp') )
@@ -170,11 +161,7 @@ class AddPNI(Script):
 
             if not (autogen_prefix_v4 and autogen_prefix_v6):
                 msg = f'Autogen v4 or v6 prefix not found'
-                self.log_failure(msg)
-                return yaml.dump({
-                    'result'  : False,
-                    'comment' : msg,
-                    })
+                raise CancelScript(msg)
 
             for cidr4 in autogen_prefix_v4.get_available_ips().iter_cidrs():
                 if cidr4.prefixlen < 32:
@@ -189,30 +176,18 @@ class AddPNI(Script):
         elif my_ipv4 and my_ipv6:
             if not ( my_ipv4.version == 4 and my_ipv6.version == 6 ):
                 msg = f'Invalid family for one or both IP assignments'
-                self.log_failure(msg)
-                return yaml.dump({
-                    'result'  : False,
-                    'comment' : msg,
-                    })
+                raise CancelScript(msg)
 
         else:
             msg = f'Either autogen must be selected or IP fields must be completed'
-            self.log_failure(msg)
-            return yaml.dump({
-                'result'  : False,
-                'comment' : msg,
-                })
+            raise CancelScript(msg)
 
         entry_addr = []
         for addr in [my_ipv4, my_ipv6]:
             for a in IPAddress.objects.filter(address=addr):
                 if a.assigned_object:
                     msg = f'{addr} is already assigned'
-                    self.log_failure(msg)
-                    return yaml.dump({
-                        'result'  : False,
-                        'comment' : msg,
-                        })
+                    raise CancelScript(msg)
 
             nb_ip = IPAddress(
                     address = addr,
@@ -235,8 +210,8 @@ class AddPNI(Script):
         if commit:
             msg = 'Changes committed'
 
-        return yaml.dump({
+        return {
             'comment' : msg,
             'result'  : commit,
             'out'     : out,
-            })
+            }
