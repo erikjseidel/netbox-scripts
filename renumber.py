@@ -61,15 +61,13 @@ class GenerateNew(Script):
                 ips = p.get_available_ips()
 
             elif isinstance(in_prefix, str):
-                if not ( p := Prefix.objects.filter(prefix=in_prefix) ):
+                if not ( p := Prefix.objects.filter(prefix=in_prefix).first() ):
                     raise CancelScript(f"Prefix { in_prefix } not found in Netbox")
 
-                assert len(p) == 1
-
-                if p[0].family != family:
+                if p.family != family:
                     raise CancelScript(f"Prefix { in_prefix }: address family mismatch")
 
-                ips = p[0].get_available_ips()
+                ips = p.get_available_ips()
 
             else:
                 # In case of incoming object (default case) we assume that prefix is
