@@ -1,4 +1,3 @@
-import yaml
 from extras.scripts import Script
 from dcim.models import Device, Interface, VirtualLink
 from ipam.models import IPAddress

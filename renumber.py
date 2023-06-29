@@ -1,4 +1,4 @@
-import netaddr, yaml
+import netaddr
 from copy import copy
 from extras.scripts import *
 from extras.models import Tag

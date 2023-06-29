@@ -1,6 +1,5 @@
 import netaddr
-from extras.scripts import Script
-from extras.scripts import *
+from extras.scripts import Script, ObjectVar, IntegerVar, BooleanVar, IPAddressWithMaskVar
 from extras.models import Tag
 from django.core.exceptions import ObjectDoesNotExist
 from dcim.models import Device, Interface
