@@ -14,6 +14,7 @@ class AddPNI(Script):
 
     class Meta:
         name = "Add PNI"
+        description = "Create a new PNI interface and IP addresses" 
         scheduling_enabled = False
         commit_default = False
 
