@@ -25,10 +25,10 @@ def yaml_out(func):
             if isinstance(self.output, dict):
                 self.output = yaml.dump(self.output)
             elif isinstance(self.output, str):
-                self.output = {
+                self.output = yaml.dump({
                         'result'  : True,
                         'comment' : self.output,
-                        }
+                        })
 
         return self.output
     return decorator
