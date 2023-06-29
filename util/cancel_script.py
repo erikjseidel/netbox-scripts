@@ -1,4 +1,3 @@
-import yaml
 from functools import wraps
 from utilities.exceptions import AbortTransaction
 
