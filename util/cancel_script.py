@@ -28,8 +28,8 @@ def cancellable(func):
         # Custom abort script handler. Add output rather than no output (which is
         # default action)
         except CancelScript as e:
-            self.log_failure(f"Script cancelled with error: {e}")
-            self.log_info("Database changes have been reverted due to error.")
+            self.log_failure(f"Script cancelled with message: {e}")
+            self.log_info("Script cancelled. Database changes have been reverted.")
             self.output = str(e)
 
             # Tell Netbox to rollback the transaction (same behaviour as commit=False)
