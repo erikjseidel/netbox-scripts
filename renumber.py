@@ -53,7 +53,6 @@ class GenerateNew(Script):
                 try:
                     p = Prefix.objects.get(id=in_prefix)
                 except DoesNotExist:
-                    # In case of errors we return a str instead of a netaddr netset.
                     raise CancelScript(f"Prefix id { in_prefix } not found in Netbox")
 
                 if p.family != family:
