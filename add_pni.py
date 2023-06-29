@@ -111,16 +111,8 @@ class AddPNI(Script):
                             role=ipam_role,
                             )
                     nb_vlan.save()
-                    entry['vlan'] = {
-                            'vid'     : nb_vlan.vid,
-                            'site'    : site.name,
-                            }
                     self.log_info(f'VLAN {nb_vlan.vid} at {site.name} created')
                 else:
-                    entry['vlan'] = {
-                            'vid'     : nb_vlan.vid,
-                            'site'    : site.name,
-                            }
                     self.log_info(f'VLAN {nb_vlan.vid} at {site.name} found')
 
                 vlan = Interface(
@@ -139,6 +131,11 @@ class AddPNI(Script):
                 self.log_info(f'VLAN interface {vlan.name} created')
 
                 interface=vlan
+
+            entry['vlan'] = {
+                    'vid'     : interface.untagged_vlan.vid,
+                    'site'    : interface.untagged_vlan.site.name,
+                    }
 
         if interface.count_ipaddresses > 0:
             msg = f'Interface {interface.name} already has IPs assigned to it'
