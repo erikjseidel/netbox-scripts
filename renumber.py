@@ -4,6 +4,8 @@ from extras.scripts import *
 from extras.models import Tag
 from dcim.models import Interface, VirtualLink
 from ipam.models import Prefix, IPAddress
+from scripts.util.cancel_script import CancelScript, cancellable
+from scripts.util.yaml_out import yaml_out
 
 class GenerateNew(Script):
 
@@ -29,6 +31,8 @@ class GenerateNew(Script):
         }
     )
 
+    @yaml_out
+    @cancellable
     def run(self, data, commit):
         updated = False
         out = {}
@@ -50,21 +54,21 @@ class GenerateNew(Script):
                     p = Prefix.objects.get(id=in_prefix)
                 except DoesNotExist:
                     # In case of errors we return a str instead of a netaddr netset.
-                    return f"Prefix id { in_prefix } not found in Netbox"
+                    raise CancelScript(f"Prefix id { in_prefix } not found in Netbox")
 
                 if p.family != family:
-                    return f"Prefix id { in_prefix }: address family mismatch"
+                    raise CancelScript(f"Prefix id { in_prefix }: address family mismatch")
 
                 ips = p.get_available_ips()
 
             elif isinstance(in_prefix, str):
                 if not ( p := Prefix.objects.filter(prefix=in_prefix) ):
-                    return f"Prefix { in_prefix } not found in Netbox"
+                    raise CancelScript(f"Prefix { in_prefix } not found in Netbox")
 
                 assert len(p) == 1
 
                 if p[0].family != family:
-                    return f"Prefix { in_prefix }: address family mismatch"
+                    raise CancelScript(f"Prefix { in_prefix }: address family mismatch")
 
                 ips = p[0].get_available_ips()
 
@@ -81,15 +85,8 @@ class GenerateNew(Script):
         # Send IPv4 and IPv6 prefix input data to get_ips handler
         #
 
-        if isinstance( (ips4 := get_ips(data['ipv4_prefix'], 4)), str ):
-            # if we get a str back that means there was a problem and we should
-            # just return the message contained in the str.
-            self.log_warning(ips4)
-            return yaml.dump({'result': False, 'out': None, 'comment': ips4})
-
-        if isinstance( (ips6 := get_ips(data['ipv6_prefix'], 6)), str ):
-            self.log_warning(ips6)
-            return yaml.dump({'result': False, 'out': None, 'comment': ips6})
+        ips4 = get_ips(data['ipv4_prefix'], 4)
+        ips6 = get_ips(data['ipv6_prefix'], 6)
 
         #
         # Load or create 'new_ip' tag which is used to mark IPs created by this method.
@@ -215,14 +212,13 @@ class GenerateNew(Script):
         if updated:
             self.log_success('New IP address generation for selected PTP interfaces complete.')
         else:
-            msg = 'No eligible interfaces marked for renumbering.'
-            self.log_warning(msg)
-            return yaml.dump({ "result": False, "comment": msg })
+            raise CancelScript('No eligible interfaces marked for renumbering.')
 
-        # Adhere to yaml output as this is (1) human readable in case script used directly from
-        # NetBox UI and (2) can be converted back to an object in case of API consumers such as
-        # SaltStack or netdb-util calls.
-        return yaml.dump({ "result": True, "out": out, "comment": "renumber process completed."})
+        return { 
+                'result'  : True, 
+                'out'     : out, 
+                'comment' : 'renumber process completed.',
+                }
 
 
 class PruneIPs(Script):
@@ -233,6 +229,7 @@ class PruneIPs(Script):
         scheduling_enabled = False
         commit_default = False
 
+    @yaml_out
     def run(self, data, commit):
         prune = Tag.objects.get(name='prune')
         new_ip = Tag.objects.get(name='new_ip')
@@ -252,4 +249,8 @@ class PruneIPs(Script):
             out['new_tag_cleared'].append(str(ip.address))
         self.log_success('New IP address cleanup complete.')
 
-        return yaml.dump({ 'result': True, 'out': out, 'comment': 'IP addresses pruned' })
+        return { 
+                'result'  : True, 
+                'out'     : out, 
+                'comment' : 'IP addresses pruned',
+                }

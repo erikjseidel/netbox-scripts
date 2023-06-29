@@ -7,7 +7,6 @@ from dcim.models import Device, Interface
 from dcim.choices import InterfaceTypeChoices, InterfaceModeChoices
 from ipam.models import Prefix, IPAddress, VLAN, Role
 from ipam.choices import IPAddressStatusChoices
-#from utilities.exceptions import AbortScript, AbortTransaction
 from scripts.util.cancel_script import CancelScript, cancellable
 from scripts.util.yaml_out import yaml_out
 

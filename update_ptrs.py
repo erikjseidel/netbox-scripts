@@ -4,6 +4,7 @@ from dcim.models import Device, Interface, VirtualLink
 from ipam.models import IPAddress
 from ipam.models import L2VPNTermination
 from ipam.choices import IPAddressRoleChoices
+from scripts.util.yaml_out import yaml_out
 
 class UpdatePTRs(Script):
 
@@ -12,6 +13,7 @@ class UpdatePTRs(Script):
         description = "Updates IP address DNS fields with standardized PTR names"
 
 
+    @yaml_out
     def run(self, data, commit):
         out = {}
 
@@ -67,4 +69,4 @@ class UpdatePTRs(Script):
             self.log_warning(msg)
             ret =  { 'result': True, 'comment': msg }
 
-        return yaml.dump(ret)
+        return ret

@@ -2,6 +2,7 @@ import yaml
 from extras.scripts import Script
 from dcim.models import Device, Interface, VirtualLink
 from ipam.models import L2VPNTermination
+from scripts.util.yaml_out import yaml_out
 
 class UpdateIfaceDescriptions(Script):
 
@@ -10,6 +11,7 @@ class UpdateIfaceDescriptions(Script):
         description = "Updates interface description fields with standardized descriptions"
 
 
+    @yaml_out
     def run(self, data, commit):
         out = {}
 
@@ -76,4 +78,4 @@ class UpdateIfaceDescriptions(Script):
             self.log_warning(msg)
             ret =  { 'result': True, 'comment': msg }
 
-        return yaml.dump(ret)
+        return ret
