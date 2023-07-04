@@ -267,10 +267,12 @@ class CreateBundle(Script):
                            interface.link_peers[0].circuit.type == circuit_type ):
                 raise CancelScript(f'Interface {interface.name} not wired to a valid circuit')
 
-            description = (interface.description or "")
+            cid = interface.link_peers[0].circuit.cid
+            provider_name = interface.link_peers[0].circuit.provider.name
+            description = f'{lacp.name}: [peer={peer_asn}][{provider_name}][CID: {cid}]'
 
             interface.lag = lacp
-            interface.description = f'{lacp.name}: {description}'
+            interface.description = description
             interface.save()
 
             self.log_debug(f'interface {interface.name} assigned to {lacp_name}')
