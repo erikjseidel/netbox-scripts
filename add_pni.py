@@ -1,5 +1,5 @@
 import netaddr
-from extras.scripts import Script, ObjectVar, IntegerVar, BooleanVar, IPAddressWithMaskVar
+from extras.scripts import Script, ObjectVar, MultiObjectVar, IntegerVar, BooleanVar, StringVar, IPAddressWithMaskVar
 from extras.models import Tag
 from django.core.exceptions import ObjectDoesNotExist
 from dcim.models import Device, Interface
@@ -9,6 +9,118 @@ from ipam.choices import IPAddressStatusChoices
 from scripts.util.cancel_script import CancelScript, cancellable
 from scripts.util.yaml_out import yaml_out
 
+# Tag Names
+LacpL34Tag = 'layer3+4'
+LacpSlowTag = 'lacp_slow'
+
+class CreateBundle(Script):
+
+    class Meta:
+        name = "Create Bundle"
+        description = "Create a new LACP bundle from eligible ethernet interfaces" 
+        scheduling_enabled = False
+        commit_default = False
+
+    device = ObjectVar(
+            label = "Device",
+            description="Target Device",
+            model=Device,
+            )
+
+    interfaces = MultiObjectVar(
+            label = "Interfaces",
+            description="Target Interfaces",
+            model=Interface,
+            query_params={
+                'device_id': '$device',
+                'kind' : 'physical',
+                },
+            )
+
+    layer3_4 = BooleanVar(
+            label="Layer 3+4",
+            description='Use layer 3+4 hashing (non-standard)'
+            )
+
+    lacp_slow = BooleanVar(
+            label="LACP slow",
+            description='Use LACP "slow" rate instead of fast'
+            )
+
+    @yaml_out
+    @cancellable
+    def run(self, data, commit):
+
+        device = data['device']
+        interfaces = data['interfaces']
+        layer3_4 = data['layer3_4']
+        lacp_slow = data['lacp_slow']
+
+        entry = {}
+
+        for i in range(0,101):
+            # Find first available Vyos bundle name
+            lacp_name = f'bond{i}'
+            if not Interface.objects.filter(device=device, name=lacp_name):
+                break
+
+        lacp = Interface(
+                name=lacp_name,
+                type=InterfaceTypeChoices.TYPE_LAG,
+                device=device,
+                )
+
+        lacp.save()
+
+        entry_tags = []
+        if layer3_4:
+            lacp.tags.add( Tag.objects.get(name=LacpL34Tag) )
+            entry_tags.append(LacpL34Tag)
+
+        if lacp_slow:
+            lacp.tags.add( Tag.objects.get(name=LacpSlowTag) )
+            entry_tags.append(LacpSlowTag)
+
+        if entry_tags:
+            entry['tags'] = entry_tags
+
+        entry['status'] = 'created'
+        self.log_info(f'LACP interface {lacp.name} created')
+
+        int_names = []
+        for interface in interfaces:
+            if interface.count_ipaddresses > 0:
+                raise CancelScript(f'Interface {interface.name} already has IPs assigned to it')
+
+            if interface.lag:
+                raise CancelScript(f'Interface {interface.name} already assigned to a LAG')
+
+            description = (interface.description or "")
+
+            interface.lag = lacp
+            interface.description = f'{lacp.name}: {description}'
+            interface.save()
+
+            self.log_debug(f'interface {interface.name} assigned to {lacp_name}')
+            int_names.append(interface.name)
+
+        entry['interfaces'] = int_names
+
+        out = {}
+        out[device.name] = {}
+        out[device.name][lacp.name] = entry
+
+        msg = 'Dry run. Database changes rolled back'
+        if commit:
+            msg = 'Changes committed'
+
+        return {
+            'comment' : msg,
+            'result'  : commit,
+            'out'     : out,
+            }
+
+
 class AddPNI(Script):
 
     class Meta:
@@ -16,6 +128,12 @@ class AddPNI(Script):
         description = "Create a new PNI interface and IP addresses" 
         scheduling_enabled = False
         commit_default = False
+
+        fieldsets = (
+            ('Interface Information', ('device', 'interface', 'vlan_id', 'circuit_id')),
+            ('Peer Information', ('peer_asn', 'peer_name')),
+            ('IP Assignments', ('autogen_ips', 'my_ipv4', 'my_ipv6')),
+        )
 
     device = ObjectVar(
             label = "Device",
@@ -37,6 +155,26 @@ class AddPNI(Script):
             description='Leave blank for no VLAN tagging',
             min_value = 1,
             max_value = 4097,
+            required=False,
+            )
+
+    peer_asn = IntegerVar(
+            label = 'Peer ASN',
+            description='Used to generate description',
+            min_value = 1,
+            max_value = 4294967295,
+            required=False,
+            )
+
+    peer_name = StringVar(
+            label = 'Peer Name',
+            description='Used to generate description',
+            required=False,
+            )
+
+    circuit_id = StringVar(
+            label = 'Circuit ID',
+            description='Used to generate desccription in non-LACP configurations',
             required=False,
             )
 
@@ -83,6 +221,10 @@ class AddPNI(Script):
 
         device = interface.device
         site = device.site
+
+        peer_asn = ( str(data['peer_asn']) or "" )
+        peer_name = ( data['peer_name'] or "" )
+        circuit_id = ( data['circuit_id'] or "" )
 
         ipam_role = Role.objects.get(slug='pni-autogeneration-role')
 
@@ -139,6 +281,15 @@ class AddPNI(Script):
         if interface.count_ipaddresses > 0:
             msg = f'Interface {interface.name} already has IPs assigned to it'
             raise CancelScript(msg)
+
+        description = f'[peer={peer_asn}][{peer_name}]'
+        if interface.type != InterfaceTypeChoices.TYPE_LAG:
+            description += f'[CID: {circuit_id}]'
+
+        interface.description = description
+        interface.save()
+
+        entry['description'] = interface.description
 
         # We assume that PNIs are Layer2 PtP
         interface.tags.add( Tag.objects.get(name='l2ptp') )
