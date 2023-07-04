@@ -2,7 +2,8 @@ import netaddr
 from extras.scripts import Script, ObjectVar, MultiObjectVar, IntegerVar, BooleanVar, StringVar, IPAddressWithMaskVar
 from extras.models import Tag
 from django.core.exceptions import ObjectDoesNotExist
-from dcim.models import Device, Interface
+from circuits.models import Circuit, CircuitType, CircuitTermination, Provider, ProviderNetwork
+from dcim.models import Device, Interface, Cable
 from dcim.choices import InterfaceTypeChoices, InterfaceModeChoices
 from ipam.models import Prefix, IPAddress, VLAN, Role
 from ipam.choices import IPAddressStatusChoices
@@ -12,12 +13,176 @@ from scripts.util.yaml_out import yaml_out
 # Tag Names
 LacpL34Tag = 'layer3+4'
 LacpSlowTag = 'lacp_slow'
+PNICircuitTypeSlug = 'private-network-interconnect'
+
+# Script tags
+CreatePNIScript = 'script:create_pni'
+CreateBundleScript = 'script:create_bundle'
+ConfigurePNIScript = 'script:configure_pni'
+
+class CreatePNI(Script):
+
+    class Meta:
+        name = "Create PNI"
+        description = "Provision a new PNI circuit attached to an existing interface" 
+        scheduling_enabled = False
+        commit_default = False
+
+        fieldsets = (
+            ('Interface Information', ('device', 'interface')),
+            ('Circuit Information', ('provider', 'peer_name', 'circuit_id')),
+        )
+
+    device = ObjectVar(
+            label = "Device",
+            description="Target Device",
+            model=Device,
+            )
+
+    interface = ObjectVar(
+            label = "Interface",
+            description="Target Interface",
+            model=Interface,
+            query_params={
+                'device_id': '$device',
+                'kind' : 'physical',
+                },
+            )
+
+    provider = ObjectVar(
+            label = 'Peer (Provider)',
+            description='Circuit peer (netbox provider) name. If blank, Peer Name will be used',
+            model=Provider,
+            required=False,
+            )
+
+    peer_name = StringVar(
+            label = 'Peer (Provider) Name',
+            description='Name of PNI peer (netbox provider)',
+            required=False,
+            )
+
+    circuit_id = StringVar(
+            label = 'Circuit ID',
+            description='Circuit ID',
+            )
+
+    @yaml_out
+    @cancellable
+    def run(self, data, commit):
+
+        device = data['device']
+        interface = data['interface']
+        provider = data.get('provider')
+        peer_name = data.get('peer_name')
+        circuit_id = data['circuit_id']
+
+        circuit_type = CircuitType.objects.get(slug=PNICircuitTypeSlug)
+
+        entry = {}
+
+        if interface.link_peers:
+            raise CancelScript(f'Interface {interface.name} is already wired')
+
+        entry['provider'] = { 'action' : 'found' }
+        if not provider:
+            if peer_name:
+                if not ( provider := Provider.objects.filter(name=peer_name).first() ):
+                    provider = Provider(name=peer_name)
+                    provider.save()
+                    self.log_info(f'New provider {provider.name} created')
+                    entry['provider']['action'] = 'created'
+
+            else:
+                raise CancelScript(f'Peer (Provider) not selected')
+
+        entry['provider']['name'] = provider.name
+
+        provider_network_name = f'{provider.name} Network'
+
+        entry['provider']['network'] = {
+                'action' : 'found',
+                'name'   : provider_network_name,
+                }
+
+        if not ( provider_network := ProviderNetwork.objects.filter(provider=provider, name=provider_network_name).first() ):
+            provider_network = ProviderNetwork(
+                    provider = provider,
+                    name = provider_network_name,
+                    )
+            provider_network.save()
+            self.log_info(f'New provider network {provider_network.name} created')
+            entry['provider']['network']['action'] = 'created'
+
+        if Circuit.objects.filter(cid=circuit_id):
+            raise CancelScript(f'Circuit {circuit_id} already exists')
+
+        my_circuit = Circuit(
+                cid = circuit_id,
+                type = circuit_type,
+                provider = provider,
+                )
+        my_circuit.save()
+        self.log_info(f'New circuit {my_circuit.cid} created')
+
+        entry['circuit'] = {
+                'action' : 'created',
+                'cid'    : my_circuit.cid,
+                }
+
+        a_termination = CircuitTermination(
+                circuit = my_circuit,
+                term_side = 'A',
+                site = device.site,
+                )
+        a_termination.save()
+        self.log_info(f'New circuit A termination created')
+
+        z_termination = CircuitTermination(
+                circuit = my_circuit,
+                term_side = 'Z',
+                provider_network = provider_network,
+                )
+        z_termination.save()
+        self.log_info(f'New circuit Z termination created')
+
+        cable = Cable(
+                a_terminations =  [ interface ],
+                b_terminations =  [ a_termination ],
+                )
+        cable.save()
+        self.log_info(f'Circuit {my_circuit.cid} and interface {interface.name} connected')
+
+        entry['cable'] = {
+                'action'        : 'created',
+                'a_termination' : interface.name,
+                'b_termination' : my_circuit.cid,
+                }
+
+        interface.description = f'[RESERVED][{provider.name}][CID: {my_circuit.cid}]'
+        interface.save()
+
+        entry['interface'] = {
+                'name'        : interface.name,
+                'description' : interface.description,
+                }
+
+        msg = 'Dry run. Database changes rolled back'
+        if commit:
+            msg = 'Changes committed'
+
+        return {
+            'comment' : msg,
+            'result'  : commit,
+            'out'     : entry,
+            }
+
 
 class CreateBundle(Script):
 
     class Meta:
         name = "Create Bundle"
-        description = "Create a new LACP bundle from eligible ethernet interfaces" 
+        description = "Create a new LACP bundle from circuits created with Create PNI script" 
         scheduling_enabled = False
         commit_default = False
 
@@ -55,6 +220,8 @@ class CreateBundle(Script):
         interfaces = data['interfaces']
         layer3_4 = data['layer3_4']
         lacp_slow = data['lacp_slow']
+
+        circuit_type = CircuitType.objects.get(slug=PNICircuitTypeSlug)
 
         entry = {}
 
@@ -95,6 +262,11 @@ class CreateBundle(Script):
             if interface.lag:
                 raise CancelScript(f'Interface {interface.name} already assigned to a LAG')
 
+            if not ( len(interface.link_peers) == 1 and 
+                       isinstance(interface.link_peers[0], CircuitTermination) and
+                           interface.link_peers[0].circuit.type == circuit_type ):
+                raise CancelScript(f'Interface {interface.name} not wired to a valid circuit')
+
             description = (interface.description or "")
 
             interface.lag = lacp
@@ -121,17 +293,18 @@ class CreateBundle(Script):
             }
 
 
-class AddPNI(Script):
+class ConfigurePNI(Script):
 
     class Meta:
-        name = "Add PNI"
-        description = "Create a new PNI interface and IP addresses" 
+        name = "Configure PNI"
+        description = "Configure Layer 3 for new PNI circuit" 
         scheduling_enabled = False
         commit_default = False
 
         fieldsets = (
-            ('Interface Information', ('device', 'interface', 'vlan_id', 'circuit_id')),
-            ('Peer Information', ('peer_asn', 'peer_name')),
+            ('Interface Information', ('device', 'interface')),
+            ('VLAN configuration (optional)', ('vlan_id', 'virtual_circuit_id')),
+            ('Peer Information', ('peer_asn',)),
             ('IP Assignments', ('autogen_ips', 'my_ipv4', 'my_ipv6')),
         )
 
@@ -163,18 +336,11 @@ class AddPNI(Script):
             description='Used to generate description',
             min_value = 1,
             max_value = 4294967295,
-            required=False,
             )
 
-    peer_name = StringVar(
-            label = 'Peer Name',
-            description='Used to generate description',
-            required=False,
-            )
-
-    circuit_id = StringVar(
-            label = 'Circuit ID',
-            description='Used to generate desccription in non-LACP configurations',
+    virtual_circuit_id = StringVar(
+            label = 'Virtual Circuit ID',
+            description='Virtual Circuit ID for VLANs',
             required=False,
             )
 
@@ -205,8 +371,7 @@ class AddPNI(Script):
                 device = Device.objects.get(name=data['device'])
                 interface = Interface.objects.get(device=device, name=data['interface'])
             except ObjectDoesNotExist:
-                msg = f"Interface {data['device']}:{data['interface']} not found or not unique"
-                raise CancelScript(msg)
+                raise CancelScript(f"Interface {data['device']}:{data['interface']} not found or not unique")
 
             if my_ipv4 := data.get('my_ipv4'):
                 my_ipv4 = netaddr.IPNetwork(my_ipv4)
@@ -224,7 +389,7 @@ class AddPNI(Script):
 
         peer_asn = ( str(data['peer_asn']) or "" )
         peer_name = ( data['peer_name'] or "" )
-        circuit_id = ( data['circuit_id'] or "" )
+        virtual_circuit_id = ( data['virtual_circuit_id'] or "" )
 
         ipam_role = Role.objects.get(slug='pni-autogeneration-role')
 
@@ -278,13 +443,23 @@ class AddPNI(Script):
                     'site'    : interface.untagged_vlan.site.name,
                     }
 
-        if interface.count_ipaddresses > 0:
-            msg = f'Interface {interface.name} already has IPs assigned to it'
-            raise CancelScript(msg)
+            description = f'[peer={peer_asn}][VCID: {virtual_circuit_id}]'
 
-        description = f'[peer={peer_asn}][{peer_name}]'
-        if interface.type != InterfaceTypeChoices.TYPE_LAG:
-            description += f'[CID: {circuit_id}]'
+        else:
+            if interface.count_ipaddresses > 0:
+                raise CancelScript(f'Interface {interface.name} already has IPs assigned to it')
+
+            if interface.type == InterfaceTypeChoices.TYPE_LAG: 
+                description = f'[peer={peer_asn}]'
+            else:
+                if not ( len(interface.link_peers) == 1 and 
+                           isinstance(interface.link_peers[0], CircuitTermination) and
+                               interface.link_peers[0].circuit.type == circuit_type ):
+                    raise CancelScript(f'Non-VLAN/LAG Interface {interface.name} not wired to a valid circuit')
+
+                cid = interface.link_peers[0].circuit.cid
+                provider_name = interface.link_peers[0].circuit.provider.name
+                description = f'[peer={peer_asn}][{provider_name}][CID: {cid}]'
 
         interface.description = description
         interface.save()
@@ -307,8 +482,7 @@ class AddPNI(Script):
                     autogen_prefix_v6 = prefix
 
             if not (autogen_prefix_v4 and autogen_prefix_v6):
-                msg = f'Autogen v4 or v6 prefix not found'
-                raise CancelScript(msg)
+                raise CancelScript(f'Autogen v4 or v6 prefix not found')
 
             for cidr4 in autogen_prefix_v4.get_available_ips().iter_cidrs():
                 if cidr4.prefixlen < 32:
@@ -322,19 +496,16 @@ class AddPNI(Script):
 
         elif my_ipv4 and my_ipv6:
             if not ( my_ipv4.version == 4 and my_ipv6.version == 6 ):
-                msg = f'Invalid family for one or both IP assignments'
-                raise CancelScript(msg)
+                raise CancelScript(f'Invalid family for one or both IP assignments')
 
         else:
-            msg = f'Either autogen must be selected or IP fields must be completed'
-            raise CancelScript(msg)
+            raise CancelScript('Either autogen must be selected or IP fields must be completed')
 
         entry_addr = []
         for addr in [my_ipv4, my_ipv6]:
             for a in IPAddress.objects.filter(address=addr):
                 if a.assigned_object:
-                    msg = f'{addr} is already assigned'
-                    raise CancelScript(msg)
+                    raise CancelScript(f'{addr} is already assigned')
 
             nb_ip = IPAddress(
                     address = addr,
