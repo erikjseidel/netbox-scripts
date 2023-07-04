@@ -130,6 +130,9 @@ class CreatePNI(Script):
                 'cid'    : my_circuit.cid,
                 }
 
+        interface.description = f'[RESERVED][{provider.name}][CID: {my_circuit.cid}]'
+        interface.save()
+
         a_termination = CircuitTermination(
                 circuit = my_circuit,
                 term_side = 'A',
@@ -158,9 +161,6 @@ class CreatePNI(Script):
                 'a_termination' : interface.name,
                 'b_termination' : my_circuit.cid,
                 }
-
-        interface.description = f'[RESERVED][{provider.name}][CID: {my_circuit.cid}]'
-        interface.save()
 
         entry['interface'] = {
                 'name'        : interface.name,
@@ -233,6 +233,7 @@ class CreateBundle(Script):
 
         lacp = Interface(
                 name=lacp_name,
+                description='[RESERVED][netbox.scripts.CreateBundle]',
                 type=InterfaceTypeChoices.TYPE_LAG,
                 device=device,
                 )
@@ -254,7 +255,7 @@ class CreateBundle(Script):
         entry['status'] = 'created'
         self.log_info(f'LACP interface {lacp.name} created')
 
-        int_names = []
+        int_names = {}
         for interface in interfaces:
             if interface.count_ipaddresses > 0:
                 raise CancelScript(f'Interface {interface.name} already has IPs assigned to it')
@@ -269,14 +270,14 @@ class CreateBundle(Script):
 
             cid = interface.link_peers[0].circuit.cid
             provider_name = interface.link_peers[0].circuit.provider.name
-            description = f'{lacp.name}: [peer={peer_asn}][{provider_name}][CID: {cid}]'
+            description = f'{lacp.name}: [{provider_name}][CID: {cid}]'
 
             interface.lag = lacp
             interface.description = description
             interface.save()
 
             self.log_debug(f'interface {interface.name} assigned to {lacp_name}')
-            int_names.append(interface.name)
+            int_names[interface.name] = { 'description' : interface.description }
 
         entry['interfaces'] = int_names
 
@@ -390,10 +391,11 @@ class ConfigurePNI(Script):
         site = device.site
 
         peer_asn = ( str(data['peer_asn']) or "" )
-        peer_name = ( data['peer_name'] or "" )
         virtual_circuit_id = ( data['virtual_circuit_id'] or "" )
 
         ipam_role = Role.objects.get(slug='pni-autogeneration-role')
+
+        circuit_type = CircuitType.objects.get(slug=PNICircuitTypeSlug)
 
         entry = {}
 
