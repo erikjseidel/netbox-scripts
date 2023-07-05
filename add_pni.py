@@ -253,8 +253,9 @@ class CreateBundle(Script):
             device = data['device']
             interfaces = data['interfaces']
 
-        layer3_4 = data['layer3_4']
-        lacp_slow = data['lacp_slow']
+        # get and cast bool for API calls (where key not present is interpreted as false)
+        layer3_4 = bool( data.get('layer3_4') )
+        lacp_slow = bool( data.get('lacp_slow') )
 
         circuit_type = CircuitType.objects.get(slug=PNICircuitTypeSlug)
         pni_tag = lazy_load_tag(PNICircuitTag)
@@ -430,7 +431,7 @@ class ConfigurePNI(Script):
         site = device.site
 
         peer_asn = str(data['peer_asn'])
-        virtual_circuit_id = ( data['virtual_circuit_id'] or "" )
+        virtual_circuit_id = data.get('virtual_circuit_id')
 
         ipam_role = Role.objects.get(slug='pni-autogeneration-role')
         circuit_type = CircuitType.objects.get(slug=PNICircuitTypeSlug)
@@ -456,6 +457,8 @@ class ConfigurePNI(Script):
 
             if found_vlan := Interface.objects.filter(name=vlan_name).first():
                 interface = found_vlan
+                if 'pni:configured' in interface.tags.names():
+                    raise CancelScript(f'vPNI already configured on {interface.name}')
             else:
                 if not ( nb_vlan := VLAN.objects.filter(vid=vlan_id, site=site).first() ):
                     nb_vlan = VLAN(
@@ -490,15 +493,13 @@ class ConfigurePNI(Script):
                     'site'    : interface.untagged_vlan.site.name,
                     }
 
-            description = f'[T=pni][peer={peer_asn}][VCID: {virtual_circuit_id}]'
+            description = f'[T=pni][peer={peer_asn}]'
             if virtual_circuit_id:
+               description = f'[T=pni][peer={peer_asn}][VCID: {virtual_circuit_id}]'
                vcid_tag = make_semantic_tag(VlanVcidTagSuffix, virtual_circuit_id)
                interface.tags.add(vcid_tag)
 
         else:
-            if interface.count_ipaddresses > 0:
-                raise CancelScript(f'Interface {interface.name} already has IPs assigned to it')
-
             if interface.type == InterfaceTypeChoices.TYPE_LAG: 
                 description = f'[T=pni][peer={peer_asn}]'
             else:
@@ -510,6 +511,9 @@ class ConfigurePNI(Script):
                 cid = interface.link_peers[0].circuit.cid
                 provider_name = interface.link_peers[0].circuit.provider.name
                 description = f'[T=pni][peer={peer_asn}][{provider_name}][CID: {cid}]'
+
+        if interface.count_ipaddresses > 0:
+            raise CancelScript(f'Interface {interface.name} already has IPs assigned to it')
 
         interface.description = description
         interface.save()
