@@ -1,6 +1,7 @@
 import netaddr
 from extras.scripts import Script, ObjectVar, MultiObjectVar, IntegerVar, BooleanVar, StringVar, IPAddressWithMaskVar
 from extras.models import Tag
+from django.utils.text import slugify
 from django.core.exceptions import ObjectDoesNotExist
 from circuits.models import Circuit, CircuitType, CircuitTermination, Provider, ProviderNetwork
 from dcim.models import Device, Interface, Cable
@@ -9,16 +10,21 @@ from ipam.models import Prefix, IPAddress, VLAN, Role
 from ipam.choices import IPAddressStatusChoices
 from scripts.util.cancel_script import CancelScript, cancellable
 from scripts.util.yaml_out import yaml_out
+from scripts.util.tags import lazy_load_tag, make_semantic_tag
 
 # Tag Names
 LacpL34Tag = 'layer3+4'
 LacpSlowTag = 'lacp_slow'
+L2ptpTag = 'l2ptp'
 PNICircuitTypeSlug = 'private-network-interconnect'
 
-# Script tags
-CreatePNIScript = 'script:create_pni'
-CreateBundleScript = 'script:create_bundle'
-ConfigurePNIScript = 'script:configure_pni'
+# PNI identifiers
+PNICircuitTag = 'pni:circuit'        # Ports or bundles created or managed by this module
+PNIConfiguredTag = 'pni:configured'  # Interfaces configured by ConfigurePNI script
+
+# Semantic tag prefixes
+VlanVcidTagSuffix = 'pni:vcid'       # "Virtual" Circuit Identifiers for vPNI
+PeerASNTagSuffix = 'pni:asn'         # Peer ASN for configured PNIs
 
 class CreatePNI(Script):
 
@@ -78,6 +84,7 @@ class CreatePNI(Script):
         circuit_id = data['circuit_id']
 
         circuit_type = CircuitType.objects.get(slug=PNICircuitTypeSlug)
+        pni_tag = lazy_load_tag(PNICircuitTag)
 
         entry = {}
 
@@ -88,7 +95,7 @@ class CreatePNI(Script):
         if not provider:
             if peer_name:
                 if not ( provider := Provider.objects.filter(name=peer_name).first() ):
-                    provider = Provider(name=peer_name)
+                    provider = Provider(name=peer_name, slug=slugify(peer_name))
                     provider.save()
                     self.log_info(f'New provider {provider.name} created')
                     entry['provider']['action'] = 'created'
@@ -130,6 +137,8 @@ class CreatePNI(Script):
                 'cid'    : my_circuit.cid,
                 }
 
+        interface.tags.add(pni_tag)
+
         interface.description = f'[RESERVED][{provider.name}][CID: {my_circuit.cid}]'
         interface.save()
 
@@ -165,6 +174,7 @@ class CreatePNI(Script):
         entry['interface'] = {
                 'name'        : interface.name,
                 'description' : interface.description,
+                'tags'        : list(interface.tags.names()),
                 }
 
         msg = 'Dry run. Database changes rolled back'
@@ -199,6 +209,7 @@ class CreateBundle(Script):
             query_params={
                 'device_id': '$device',
                 'kind' : 'physical',
+                'tag' : slugify(PNICircuitTag),
                 },
             )
 
@@ -222,6 +233,7 @@ class CreateBundle(Script):
         lacp_slow = data['lacp_slow']
 
         circuit_type = CircuitType.objects.get(slug=PNICircuitTypeSlug)
+        pni_tag = lazy_load_tag(PNICircuitTag)
 
         entry = {}
 
@@ -240,7 +252,9 @@ class CreateBundle(Script):
 
         lacp.save()
 
-        entry_tags = []
+        lacp.tags.add(pni_tag)
+        entry_tags = [ pni_tag.name ]
+
         if layer3_4:
             lacp.tags.add( Tag.objects.get(name=LacpL34Tag) )
             entry_tags.append(LacpL34Tag)
@@ -322,7 +336,8 @@ class ConfigurePNI(Script):
             description="Target Interface",
             model=Interface,
             query_params={
-                'device_id': '$device'
+                'device_id': '$device',
+                'tag' : slugify(PNICircuitTag),
                 },
             )
 
@@ -390,12 +405,16 @@ class ConfigurePNI(Script):
         device = interface.device
         site = device.site
 
-        peer_asn = ( str(data['peer_asn']) or "" )
+        peer_asn = str(data['peer_asn'])
         virtual_circuit_id = ( data['virtual_circuit_id'] or "" )
 
         ipam_role = Role.objects.get(slug='pni-autogeneration-role')
-
         circuit_type = CircuitType.objects.get(slug=PNICircuitTypeSlug)
+
+        # Load / create tags that will be used later in the script
+        pni_tag = lazy_load_tag(PNIConfiguredTag)
+        l2ptp_tag = lazy_load_tag(L2ptpTag)
+        peer_asn_tag = make_semantic_tag(PeerASNTagSuffix, peer_asn)
 
         entry = {}
 
@@ -447,14 +466,17 @@ class ConfigurePNI(Script):
                     'site'    : interface.untagged_vlan.site.name,
                     }
 
-            description = f'[peer={peer_asn}][VCID: {virtual_circuit_id}]'
+            description = f'[T=pni][peer={peer_asn}][VCID: {virtual_circuit_id}]'
+            if virtual_circuit_id:
+               vcid_tag = make_semantic_tag(VlanVcidTagSuffix, virtual_circuit_id)
+               interface.tags.add(vcid_tag)
 
         else:
             if interface.count_ipaddresses > 0:
                 raise CancelScript(f'Interface {interface.name} already has IPs assigned to it')
 
             if interface.type == InterfaceTypeChoices.TYPE_LAG: 
-                description = f'[peer={peer_asn}]'
+                description = f'[T=pni][peer={peer_asn}]'
             else:
                 if not ( len(interface.link_peers) == 1 and 
                            isinstance(interface.link_peers[0], CircuitTermination) and
@@ -463,7 +485,7 @@ class ConfigurePNI(Script):
 
                 cid = interface.link_peers[0].circuit.cid
                 provider_name = interface.link_peers[0].circuit.provider.name
-                description = f'[peer={peer_asn}][{provider_name}][CID: {cid}]'
+                description = f'[T=pni][peer={peer_asn}][{provider_name}][CID: {cid}]'
 
         interface.description = description
         interface.save()
@@ -471,7 +493,9 @@ class ConfigurePNI(Script):
         entry['description'] = interface.description
 
         # We assume that PNIs are Layer2 PtP
-        interface.tags.add( Tag.objects.get(name='l2ptp') )
+        interface.tags.add(l2ptp_tag)
+        interface.tags.add(pni_tag)
+        interface.tags.add(peer_asn_tag)
         entry['tags'] = list(interface.tags.names())
 
         if data.get('autogen_ips'):

@@ -2,6 +2,9 @@ from extras.scripts import Script
 from dcim.models import Device, Interface, VirtualLink
 from ipam.models import L2VPNTermination
 from scripts.util.yaml_out import yaml_out
+from scripts.util.tags import parse_semantic_tags
+
+PNICircuitTag='pni:circuit'
 
 class UpdateIfaceDescriptions(Script):
 
@@ -16,6 +19,9 @@ class UpdateIfaceDescriptions(Script):
 
         for interface in Interface.objects.all():
             updated = False
+
+            tags = list(interface.tags.names())
+            semantic_tags = parse_semantic_tags(interface.tags.all())
 
             description = None
             if interface.name.startswith('dum'):
@@ -44,7 +50,13 @@ class UpdateIfaceDescriptions(Script):
 
                 cid = link_peers[0].circuit.cid
                 provider = link_peers[0].circuit.provider.name
-                description = f'[T=transit][{provider}:{cid}]'
+
+                if interface.lag and 'pni:circuit' in tags:
+                    description = f'{interface.lag.name}: [{provider}][CID: {cid}]'
+                elif 'pni:asn' in semantic_tags:
+                    description = f"[T=pni][peer={semantic_tags['pni:asn']}][{provider}][CID: {cid}]"
+                else:
+                    description = f'[T=transit][{provider}:{cid}]'
 
             elif l2vpn := interface.l2vpn_termination:
                 name = l2vpn.l2vpn.name
@@ -53,6 +65,8 @@ class UpdateIfaceDescriptions(Script):
 
             elif vlan := interface.untagged_vlan:
                 description = f'[T=lan][vid={vlan.vid}] {vlan.name}'
+                if 'pni:asn' in semantic_tags and 'pni:vcid' in semantic_tags:
+                    description = f"[T=pni][peer={semantic_tags['pni:asn']}][VCID: {semantic_tags['pni:vcid']}]"
 
             if description and interface.description != description:
                 interface.description = description
