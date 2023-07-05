@@ -77,8 +77,18 @@ class CreatePNI(Script):
     @cancellable
     def run(self, data, commit):
 
-        device = data['device']
-        interface = data['interface']
+        if isinstance(data['device'], str) and isinstance(data['interface'], str):
+            # API call using strings to identify the interface. API calls use peer_name rather than provider.
+            try:
+                device = Device.objects.get(name=data['device'])
+                interface = Interface.objects.get(device=device, name=data['interface'])
+            except ObjectDoesNotExist:
+                raise CancelScript(f"Interface {data['device']}:{data['interface']} not found or not unique")
+
+        else:
+            device = data['device']
+            interface = data['interface']
+
         provider = data.get('provider')
         peer_name = data.get('peer_name')
         circuit_id = data['circuit_id']
@@ -227,8 +237,22 @@ class CreateBundle(Script):
     @cancellable
     def run(self, data, commit):
 
-        device = data['device']
-        interfaces = data['interfaces']
+        if isinstance(data['device'], str) and isinstance(data['interfaces'], list):
+            # API call using strings / list of strings to identify the interface
+            try:
+                device = Device.objects.get(name=data['device'])
+
+                interfaces = []
+                for interface in data['interfaces']:
+                    interfaces.append(Interface.objects.get(device=device, name=interface))
+
+            except ObjectDoesNotExist:
+                raise CancelScript(f"Interface {data['device']}:{data['interface']} not found or not unique")
+
+        else:
+            device = data['device']
+            interfaces = data['interfaces']
+
         layer3_4 = data['layer3_4']
         lacp_slow = data['lacp_slow']
 
