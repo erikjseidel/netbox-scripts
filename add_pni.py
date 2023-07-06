@@ -150,6 +150,7 @@ class CreatePNI(Script):
         interface.tags.add(pni_tag)
 
         interface.description = f'[RESERVED][{provider.name}][CID: {my_circuit.cid}]'
+        interface.enabled = False
         interface.save()
 
         a_termination = CircuitTermination(
@@ -185,6 +186,7 @@ class CreatePNI(Script):
                 'name'        : interface.name,
                 'description' : interface.description,
                 'tags'        : list(interface.tags.names()),
+                'enabled'     : interface.enabled,
                 }
 
         msg = 'Dry run. Database changes rolled back'
@@ -273,6 +275,7 @@ class CreateBundle(Script):
                 description='[RESERVED][netbox.scripts.CreateBundle]',
                 type=InterfaceTypeChoices.TYPE_LAG,
                 device=device,
+                enabled=False,
                 )
 
         lacp.save()
@@ -292,6 +295,7 @@ class CreateBundle(Script):
             entry['tags'] = entry_tags
 
         entry['status'] = 'created'
+        entry['enabled'] = lacp.enabled
         self.log_info(f'LACP interface {lacp.name} created')
 
         int_names = {}
@@ -313,10 +317,14 @@ class CreateBundle(Script):
 
             interface.lag = lacp
             interface.description = description
+            interface.enabled = True
             interface.save()
 
             self.log_debug(f'interface {interface.name} assigned to {lacp_name}')
-            int_names[interface.name] = { 'description' : interface.description }
+            int_names[interface.name] = { 
+                    'enabled'     : interface.enabled,
+                    'description' : interface.description ,
+                    }
 
         entry['interfaces'] = int_names
 
@@ -516,9 +524,11 @@ class ConfigurePNI(Script):
             raise CancelScript(f'Interface {interface.name} already has IPs assigned to it')
 
         interface.description = description
+        interface.enabled = True
         interface.save()
 
         entry['description'] = interface.description
+        entry['enabled'] = interface.enabled
 
         # We assume that PNIs are Layer2 PtP
         interface.tags.add(l2ptp_tag)
