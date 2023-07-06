@@ -323,7 +323,7 @@ class CreateBundle(Script):
             self.log_debug(f'interface {interface.name} assigned to {lacp_name}')
             int_names[interface.name] = { 
                     'enabled'     : interface.enabled,
-                    'description' : interface.description ,
+                    'description' : interface.description,
                     }
 
         entry['interfaces'] = int_names
