@@ -20,8 +20,13 @@ class UpdatePTRs(Script):
             ptr_prefix = None
 
             tags = address.tags.names()
-            interface = address.interface.get()
 
+            try:
+                interface = address.interface.get()
+            except:
+                # Skip addresses wihout parent interfaces.
+                continue
+                
             if 'l2ptp' in tags or 'l3ptp' in tags:
                 if vl := interface.virtual_link:
                     if vl.interface_a.id == interface.id:
